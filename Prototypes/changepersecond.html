@@ -1,0 +1,467 @@
+<html>
+	<head>
+		<title>Workforce</title>
+
+		<style type="text/css">
+			.row {
+				display: flex;
+			}
+
+			.room {
+				min-width: 30%;
+				margin: 10px;
+				border: 1px solid darkgray;
+			}
+
+			.room.small {
+				width: 30%;
+			}
+
+			.room h4 {
+				margin: 2px;
+			}
+
+			.room .occupants {
+				border: 1px dotted lightgray;
+				margin: 5px;
+				height: 80px;
+				user-select: none;
+			}
+
+			.room .over {
+				background-color: rgba(0, 0, 0, .1);
+			}
+
+			.robot {
+				width: 50px;
+				height: 50px;
+				margin: 10px;
+				background-color: rgba(0, 50, 0, .75);
+				display: inline-block;
+				color: #aaa;
+				text-align: center;
+			}
+		</style>
+
+		<script type="text/javascript">
+			class Room
+			{
+				constructor(id)
+				{
+					this.id = id;
+					this.robots = [];
+					this.el;
+					this.content;
+					this.energy = null;
+					this.robotEnergyDrain = 0;
+
+					let root = document.createElement('div');
+					// root.id = id;
+					root.classList.add('room');
+
+					let header = document.createElement('h4');
+					header.innerText = id;
+					root.appendChild(header);
+
+					let content = document.createElement('div');
+					content.id = id;
+					content.classList.add('occupants');
+					content.setAttribute('data-room', id);
+					root.appendChild(content);
+
+					content.addEventListener('dragover', function(ev) {
+						ev.preventDefault();
+					});
+					content.addEventListener('dragenter', function(ev) {
+						this.classList.add('over');
+					});
+					content.addEventListener('dragleave', function(ev) {
+						this.classList.remove('over');
+					});
+					content.addEventListener('drop', function(ev) {
+						this.classList.remove('over');
+
+						const roomId = this.getAttribute('data-room');
+						const room = rooms.find(function(room) {
+							return room.id === roomId;
+						});
+
+						console.assert(room, "Failed to find room", roomId);
+
+						const robotId = ev.dataTransfer.getData('text/plain');
+
+						// find the robot
+						const robot = robots.find(function(robot) {
+							return robot.id === robotId;
+						});
+
+						console.assert(robot, "Failed to find robot with id", robotId);
+
+						if (robot)
+						{
+							robot.room.left(robot);
+							robot.room = room;
+							room.entered(robot);
+						}
+					});
+
+					this.el = root;
+					this.header = header;
+					this.content = content;
+				}
+
+				entered(robot)
+				{
+					this.content.appendChild(robot.el);
+					this.robots.push(robot);
+					robot.room = this;
+				}
+
+				left(robot)
+				{
+					const index = this.robots.findIndex(function(existingRobot) { return existingRobot === robot});
+					console.assert(index !== -1, "Failed to find robot in room!");
+
+					this.robots.splice(index, 1);
+					robot.room = null;
+
+					robot.setState('Idle');
+				}
+
+				render()
+				{
+				}
+
+				update()
+				{
+				}
+			}
+
+			class Generator extends Room
+			{
+				constructor(id)
+				{
+					super(id);
+
+					this.baseGeneration = 5;
+					this.multipler = 1.0;
+					this.energy = 0;
+					this.robotEnergyDrain = 2;
+
+					// stored to render
+					this.energyPerSecond = 0;
+				}
+
+				entered(robot)
+				{
+					super.entered(robot);
+
+					const maximumGeneration = ((robot.energy - 10) / (robot.baseDrainPerSecond + this.robotEnergyDrain) * this.baseGeneration);
+					console.log("Robot will generate", maximumGeneration, "energy maximum");
+
+					robot.setState('Power Generation');
+				}
+
+				update(delta)
+				{
+					super.update(delta);
+
+					// calculate income per second
+					let robotIncome = 0;
+					this.robots.forEach((robot) => {
+						if (robot.state === 'Power Generation')
+						{
+							robotIncome += (this.baseGeneration * robot.generationMultiplier);
+						}
+					});
+
+					this.energyPerSecond = robotIncome * this.multipler;
+
+					// console.log(delta);
+					let modifiedIncome = ((robotIncome * this.multipler) * delta);
+					this.energy = this.energy + ((robotIncome * this.multipler) * delta);
+					// console.log("++", this.robots[0] ? this.robots[0].energy : 0, modifiedIncome, this.energy);
+				}
+
+				render(delta)
+				{
+					super.render(delta);
+					this.header.innerText = this.id + ' ' + this.energy.toFixed(1) + ' (' + this.energyPerSecond.toFixed(1) + '/s)';
+				}
+			}
+
+			class Power extends Room
+			{
+				constructor(id)
+				{
+					super(id);
+
+					this.energy = 15;
+					this.maximumEnergy = 1000;
+					this.baseTransferPerSecond = 10;
+
+					// not saved
+					this.source = null;
+					// for render
+					this.energyPerSecond = 0;
+				}
+				entered(robot)
+				{
+					super.entered(robot);
+
+					robot.setState('Recharging');
+				}
+
+				update(delta)
+				{
+					super.update(delta);
+
+					let transferPerSecond = 0;
+					if (this.source && this.source.energy > 0)
+					{
+						transferPerSecond = Math.min(Math.max(this.source.energy, this.source.energyPerSecond), this.baseTransferPerSecond);
+
+						const transferredEnergy = Math.min(this.source.energy, this.baseTransferPerSecond * delta);
+						this.source.energy = this.source.energy - transferredEnergy;
+						this.energy = this.energy + transferredEnergy;
+					}
+
+					this.robots.forEach((robot) => {
+						if (robot.state === 'Recharging')
+						{
+							transferPerSecond -= Math.min(this.energy, Math.abs(robot.energyPerSecond), robot.maximumRechargePerSecond);
+						}
+					});
+
+					this.energyPerSecond = transferPerSecond;
+				}
+
+				render(delta)
+				{
+					super.render(delta);
+					this.header.innerText = this.id + ' ' + this.energy.toFixed(1) + ' (' + this.energyPerSecond.toFixed(1) + '/s)';
+				}
+			}
+
+			const ROBOT_STATES = ['Idle', 'Power Generation', 'Production', 'Recharging'];
+
+			class Robot
+			{
+				constructor(id)
+				{
+					this.id = id;
+					this.el = (function() {
+						let el = document.createElement('div');
+						el.id = id;
+						el.classList.add('robot');
+						el.setAttribute('draggable', true);
+						el.setAttribute('title', id);
+
+						el.addEventListener('dragstart', function(ev) {
+							ev.dataTransfer.setData('text/plain', ev.target.id);
+							ev.dataTransfer.effectAllowed = 'move';
+						});
+
+						el.addEventListener('dragend', function(ev) {
+							// this.parentNode.removeChild(this);
+						});
+
+						return el;
+					})();
+
+					this.state = 'Idle';
+					this.room = null;
+					this.energy = 20;
+					this.maximumEnergy = 100;
+
+					// stats
+					this.baseDrainPerSecond = -0.2;
+					this.energyEfficiencyModifier = 1.0;
+					this.generationMultiplier = 1.0;
+					this.maximumRechargePerSecond = 8;
+
+					// stored for render
+					this.energyPerSecond = 0;
+				}
+
+				setState(state)
+				{
+					if (this.state != state)
+					{
+						switch (state)
+						{
+							case 'Power Generation':
+							case 'Production':
+							{
+								if (this.hasMinimumEnergy())
+								{
+									this.state = state;
+								}
+								break;
+							}
+							default:
+							{
+								this.state = state;
+								break;
+							}
+						}
+					}
+
+					console.log("State '%s'", this.state);
+				}
+
+				hasMinimumEnergy()
+				{
+					return this.energy > (this.maximumEnergy * 0.1);
+				}
+
+				update(delta)
+				{
+					// apply default energy drain
+					this.energy = this.energy + ((this.baseDrainPerSecond * this.energyEfficiencyModifier) * delta);
+					this.energyPerSecond = this.baseDrainPerSecond;
+
+					switch (this.state)
+					{
+						case 'Power Generation':
+						case 'Production':
+						{
+							// checking room type every tick isn't ideal...
+							if (this.room instanceof Generator || this.room instanceof Generator)
+							{
+								if (this.hasMinimumEnergy())
+								{
+									// if the robot is using an object, that would define the base drain for the job
+									// at this point, it's just the room
+									this.energyPerSecond -= this.room.robotEnergyDrain;
+									this.energy = this.energy - ((this.room.robotEnergyDrain * this.energyEfficiencyModifier) * delta);
+									break;
+								}
+								else
+								{
+									// change state, as the robot cannot work when out of energy
+									console.log("Robot does not have enough energy to continue working");
+									this.setState('Idle');
+								}
+							}
+						}
+						case 'Recharging':
+						{
+							if (this.room instanceof Power)
+							{
+								const maximumRecharge = Math.min(this.maximumEnergy - this.energy, this.room.energy, this.maximumRechargePerSecond);
+								const transferEnergy = Math.min(this.maximumRechargePerSecond * delta, maximumRecharge);
+
+								this.energyPerSecond += maximumRecharge;
+								this.room.energy = this.room.energy - transferEnergy;
+								this.energy = this.energy + transferEnergy;
+							}
+							break;
+						}
+					}
+
+					this.energy = Math.max(this.energy, 0);
+					this.energy = Math.min(this.energy, 100);
+
+					// clamp to 0
+					if (this.energy < 0)
+					{
+						this.drainPerSecond = 0;
+					}
+				}
+
+				render()
+				{
+					this.el.innerText = this.energy.toFixed(1) + '\n(' + this.energyPerSecond.toFixed(1) + '/s)';
+				}
+			};
+
+			let connections = [];
+
+			const rooms = ['arrivals', 'production', 'generator', 'power'].map(function(id) {
+				let room;
+				switch (id)
+				{
+					case 'generator':
+					{
+						room = new Generator(id);
+						break;
+					}
+					case 'power':
+					{
+						room = new Power(id);
+						break;
+					}
+					default:
+					{
+						room = new Room(id);
+						break;
+					}
+				}
+
+				return room;
+			});
+
+			const robotCount = 4;
+			let robots = [];
+
+			let index;
+			for (index = 0; index < robotCount; index++)
+			{
+				robots.push(new Robot('robot_' + index));
+			}
+
+			// simplier connection between Generator and Power rooms
+			(function() {
+				let generator = rooms.find(function(room) {
+					return room.id === 'generator';
+				});
+				let power = rooms.find(function(room) {
+					return room.id === 'power';
+				});
+
+				power.source = generator;
+			})();
+
+			let entities = [].concat(rooms, robots);
+
+			let frameTime = 0;
+			const onFrame = function(tick) {
+				const delta = (tick - frameTime) / 1000;
+
+				// update
+				entities.forEach(function(room) {
+					room.update(delta);
+				});
+
+				// render
+				entities.forEach(function(robot) {
+					robot.render(delta);
+				});
+
+				frameTime = tick;
+				window.requestAnimationFrame(onFrame);
+			}
+
+			document.addEventListener('DOMContentLoaded', function() {
+				// let rooms = document.querySelectorAll('div[data-room]');
+				let container = document.getElementById('container');
+				rooms.forEach(function(room) {
+					container.appendChild(room.el);
+				});
+
+				let arrivals = rooms.find(function(room) { return room.id === 'arrivals'; });
+				robots.forEach(function(robot) {
+					arrivals.entered(robot);
+				});
+
+				onFrame(0);
+			});
+
+		</script>
+	</head>
+
+	<body>
+		<div id="container"></div>
+	</body>
+</html>
